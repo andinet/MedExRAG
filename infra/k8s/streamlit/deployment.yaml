@@ -1,0 +1,99 @@
+# =============================================================================
+# Streamlit Web UI — CPU Node, Always-On
+# =============================================================================
+# Runs on a CPU node (cheap). VLM inference is delegated to the GPU
+# vlm-worker service via the VLM_ENDPOINT environment variable.
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit
+  namespace: medexrag
+  labels:
+    app: streamlit
+    component: web-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streamlit
+  template:
+    metadata:
+      labels:
+        app: streamlit
+        component: web-ui
+    spec:
+      nodeSelector:
+        node-type: cpu
+      containers:
+        - name: streamlit
+          image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/medexrag-streamlit:latest
+          ports:
+            - name: http
+              containerPort: 8501
+            - name: metrics
+              containerPort: 8000
+          env:
+            # Route VLM calls to the GPU worker service
+            - name: VLM_ENDPOINT
+              value: "http://vlm-worker:8080"
+            - name: MEDICAL_KB_PATH
+              value: "/app/data/medical_kb"
+            - name: LITERATURE_DIR
+              value: "/app/data/medical_literature"
+            - name: MODEL_NAME
+              value: "Qwen/Qwen2-VL-2B-Instruct"
+            - name: RAG_K_SOURCES
+              value: "5"
+            - name: LOG_FORMAT
+              value: "json"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: OTEL_ENABLED
+              value: "true"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "otel-collector:4317"
+            - name: OTEL_SERVICE_NAME
+              value: "medexrag-streamlit"
+            - name: PROMETHEUS_ENABLED
+              value: "true"
+            - name: METRICS_PORT
+              value: "8000"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "6Gi"
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: efs-data
+              mountPath: /app/data/medical_kb
+              subPath: medical_kb
+            - name: efs-data
+              mountPath: /app/data/medical_literature
+              subPath: medical_literature
+            - name: efs-data
+              mountPath: /app/data/xray_images
+              subPath: xray_images
+            - name: efs-data
+              mountPath: /app/data/analysis_results
+              subPath: analysis_results
+      volumes:
+        - name: efs-data
+          persistentVolumeClaim:
+            claimName: medexrag-efs

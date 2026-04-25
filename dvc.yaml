@@ -1,0 +1,180 @@
+# DVC Pipeline Configuration for MedExRAG MLOps
+#
+# This file defines reproducible ML pipelines for:
+# 1. Data ingestion - Process medical literature PDFs
+# 2. Evaluation - Run benchmarks on the RAG system
+# 3. Metrics reporting - Generate evaluation reports
+#
+# Usage:
+#   PYTHONPATH=src dvc repro              # Run the full pipeline
+#   PYTHONPATH=src dvc repro evaluate     # Run only evaluation stage
+#   dvc dag                               # View pipeline DAG
+#   dvc metrics show                      # Show all metrics
+#   dvc plots show                        # Generate metric plots
+#
+# Pipeline outputs are cached and only re-run when inputs change.
+
+stages:
+  # Stage 1: Ingest medical literature into vector database
+  ingest:
+    cmd: python -c "
+      import sys; sys.path.insert(0, 'src');
+      from medexrag.pipeline import MedicalRAGPipeline;
+      import os;
+      pipeline = MedicalRAGPipeline(load_vlm=False);
+      lit_dir = os.environ.get('LITERATURE_DIR', 'data/medical_literature');
+      if os.path.exists(lit_dir):
+          stats = pipeline.ingest_literature(lit_dir);
+          print(f'Ingested: {stats}');
+      else:
+          print('No literature directory found, skipping ingestion');
+      "
+    deps:
+      - data/medical_literature/
+      - src/medexrag/pipeline.py
+    outs:
+      - data/medical_kb/:
+          cache: true
+          persist: true
+
+  # Stage 2: Run evaluation benchmarks
+  evaluate:
+    cmd: python -c "
+      import sys; sys.path.insert(0, 'src');
+      import json;
+      from medexrag.evaluation.e2e_benchmarks import E2EBenchmark;
+      from medexrag.evaluation.retrieval_metrics import RetrievalEvaluator;
+
+      # Run E2E benchmarks
+      benchmark = E2EBenchmark(use_mock_pipeline=True);
+      results = benchmark.run_all(categories=['functional', 'robustness']);
+
+      # Save metrics
+      metrics = {
+          'pass_rate': results['summary']['pass_rate'],
+          'total_tests': results['summary']['total'],
+          'passed': results['summary']['passed'],
+          'failed': results['summary']['failed'],
+          'avg_latency_ms': sum(r.get('latency_ms', 0) for r in results['results']) / len(results['results']) if results['results'] else 0
+      };
+
+      with open('metrics/eval_metrics.json', 'w') as f:
+          json.dump(metrics, f, indent=2);
+
+      print(f'Evaluation complete: {metrics}');
+      "
+    deps:
+      - src/medexrag/evaluation/
+      - src/medexrag/pipeline.py
+    outs:
+      - metrics/eval_metrics.json:
+          cache: false
+    metrics:
+      - metrics/eval_metrics.json:
+          cache: false
+
+  # Stage 3: Run LLM judge evaluation (mock mode for CI)
+  llm_judge:
+    cmd: python -c "
+      import sys; sys.path.insert(0, 'src');
+      import json;
+      from medexrag.evaluation.llm_judge import LLMJudge, EvaluationDimension;
+
+      judge = LLMJudge(use_mock=True);
+
+      # Sample evaluation
+      sample_output = '''
+      FINDINGS: Chest X-ray shows consolidation in right lower lobe.
+      IMPRESSION: Findings consistent with pneumonia.
+      RECOMMENDATION: Clinical correlation recommended.
+      ''';
+      sample_context = 'ACR guidelines indicate lobar consolidation is typical of bacterial pneumonia.';
+      sample_question = 'Analyze chest X-ray for pneumonia';
+
+      result = judge.evaluate_all(sample_output, sample_context, sample_question);
+
+      metrics = {
+          'overall_score': result.overall_score,
+          'is_mock': result.is_mock,
+          'dimensions': {k: v.normalized_score for k, v in result.dimension_scores.items()}
+      };
+
+      with open('metrics/llm_judge_metrics.json', 'w') as f:
+          json.dump(metrics, f, indent=2);
+
+      print(f'LLM Judge evaluation complete: overall={result.overall_score:.2f}');
+      "
+    deps:
+      - src/medexrag/evaluation/llm_judge.py
+    outs:
+      - metrics/llm_judge_metrics.json:
+          cache: false
+    metrics:
+      - metrics/llm_judge_metrics.json:
+          cache: false
+
+  # Stage 4: Generate combined report
+  report:
+    cmd: python -c "
+      import json;
+      from datetime import datetime;
+
+      # Load all metrics
+      eval_metrics = {};
+      judge_metrics = {};
+
+      try:
+          with open('metrics/eval_metrics.json', 'r') as f:
+              eval_metrics = json.load(f);
+      except FileNotFoundError:
+          pass;
+
+      try:
+          with open('metrics/llm_judge_metrics.json', 'r') as f:
+              judge_metrics = json.load(f);
+      except FileNotFoundError:
+          pass;
+
+      # Combine into report
+      report = {
+          'timestamp': datetime.now().isoformat(),
+          'e2e_benchmarks': eval_metrics,
+          'llm_judge': judge_metrics,
+          'quality_gate': {
+              'pass_rate_threshold': 0.8,
+              'current_pass_rate': eval_metrics.get('pass_rate', 0),
+              'passed': eval_metrics.get('pass_rate', 0) >= 0.8
+          }
+      };
+
+      with open('metrics/report.json', 'w') as f:
+          json.dump(report, f, indent=2);
+
+      # Print summary
+      print('=' * 60);
+      print('MEDEXRAG MLOPS EVALUATION REPORT');
+      print('=' * 60);
+      print(f'Timestamp: {report[\"timestamp\"]}');
+      print(f'E2E Pass Rate: {eval_metrics.get(\"pass_rate\", \"N/A\")}');
+      print(f'LLM Judge Score: {judge_metrics.get(\"overall_score\", \"N/A\")}');
+      print(f'Quality Gate: {\"PASSED\" if report[\"quality_gate\"][\"passed\"] else \"FAILED\"}');
+      print('=' * 60);
+      "
+    deps:
+      - metrics/eval_metrics.json
+      - metrics/llm_judge_metrics.json
+    outs:
+      - metrics/report.json:
+          cache: false
+    metrics:
+      - metrics/report.json:
+          cache: false
+
+# Plot definitions for visualization
+plots:
+  - metrics/eval_metrics.json:
+      x: timestamp
+      y: pass_rate
+  - metrics/llm_judge_metrics.json:
+      x: timestamp
+      y: overall_score

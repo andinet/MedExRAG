@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+.virtualenv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data directories (runtime data, not committed)
+data/medical_kb/
+data/analysis_results/
+data/xray_images/
+data/medical_literature/*.pdf
+data/medical_literature/*_parsed.md
+data/medical_literature/*_parsed.json
+*.db
+*.sqlite
+*.chroma
+
+# Keep directory structure but ignore contents
+!data/medical_kb/.gitkeep
+!data/medical_literature/.gitkeep
+!data/xray_images/.gitkeep
+!data/analysis_results/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Model cache (HuggingFace models are large)
+models/
+.cache/
+huggingface/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS
+Thumbs.db
+desktop.ini
+
+# MLflow
+mlruns/

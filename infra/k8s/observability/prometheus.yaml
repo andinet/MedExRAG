@@ -1,0 +1,162 @@
+# =============================================================================
+# Prometheus — Metrics Collection (adapted from config/observability/)
+# =============================================================================
+
+# ConfigMap from existing prometheus.yml (adapted for k8s service discovery)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: medexrag
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        monitor: medical-rag-monitor
+        environment: production
+
+    rule_files:
+      - /etc/prometheus/alerts/*.yml
+
+    scrape_configs:
+      - job_name: 'medical-rag-streamlit'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ['medexrag']
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: streamlit
+          - source_labels: [__meta_kubernetes_pod_ip]
+            target_label: __address__
+            replacement: $1:8000
+
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+  # Alert rules (from config/observability/alerting/prometheus-alerts.yml)
+  alerts.yml: |
+    groups:
+      - name: vlm_alerts
+        rules:
+          - alert: HighVLMLatency
+            expr: histogram_quantile(0.95, rate(medical_rag_vlm_inference_seconds_bucket[5m])) > 30
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "VLM inference latency is high"
+
+      - name: error_alerts
+        rules:
+          - alert: HighErrorRate
+            expr: rate(medical_rag_analysis_requests_total{status="error"}[5m]) / rate(medical_rag_analysis_requests_total[5m]) > 0.1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Error rate above 10%"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: medexrag
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      nodeSelector:
+        node-type: cpu
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.47.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--web.enable-lifecycle"
+            - "--storage.tsdb.retention.time=30d"
+          ports:
+            - containerPort: 9090
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+            - name: config
+              mountPath: /etc/prometheus/alerts/alerts.yml
+              subPath: alerts.yml
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}  # Use PVC for production persistence
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: medexrag
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9090
+      targetPort: 9090
+  selector:
+    app: prometheus
+
+---
+# ServiceAccount for Prometheus to discover pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: medexrag
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-medexrag
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-medexrag
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-medexrag
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: medexrag

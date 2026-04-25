@@ -1,0 +1,28 @@
+[flake8]
+max-line-length = 120
+extend-ignore =
+    # E501: line too long (handled by black)
+    E501,
+    # W503: line break before binary operator (conflicts with black)
+    W503,
+    # E203: whitespace before ':' (conflicts with black slicing)
+    E203,
+    # E226: missing whitespace around arithmetic operator (conflicts with black)
+    E226,
+    # E402: module level import not at top of file
+    # (intentional in pipeline/__init__.py — observability must be set up first)
+    E402,
+    # F401: unused imports — re-exports in __init__.py and graceful-degradation
+    # try/except imports trigger this. Per-file-ignores below cover __init__.py;
+    # the rest are conditional imports we accept.
+    F401,
+    # F841: local variable assigned but never used — typically `except X as e:`
+    # patterns where the exception is logged via context. Acceptable.
+    F841,
+    # F811: redefinition (used for backward-compat shims in observability/__init__.py)
+    F811,
+    # F541: f-string without placeholders (cosmetic only)
+    F541
+
+per-file-ignores =
+    __init__.py:F401

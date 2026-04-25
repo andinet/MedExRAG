@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(test -f /c/s/MedExRAG/pyproject.toml)",
+      "Bash(git checkout -b feature/eks-deployment)"
+    ]
+  }
+}

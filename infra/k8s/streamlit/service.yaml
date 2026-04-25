@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamlit
+  namespace: medexrag
+  labels:
+    app: streamlit
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8501
+      targetPort: 8501
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+  selector:
+    app: streamlit

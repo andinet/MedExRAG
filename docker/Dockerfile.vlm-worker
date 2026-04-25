@@ -1,0 +1,25 @@
+# =============================================================================
+# Dockerfile for MedExRAG VLM Worker Service
+# =============================================================================
+# GPU-enabled FastAPI service for VLM inference. Used in Kubernetes
+# deployments where the VLM runs on a separate GPU node from Streamlit.
+#
+# Build: docker build -f docker/Dockerfile.vlm-worker -t medexrag-vlm-worker:latest ..
+# Run:   docker run --gpus all -p 8080:8080 medexrag-vlm-worker:latest
+# =============================================================================
+
+FROM medexrag-base:latest
+
+# Expose FastAPI port
+EXPOSE 8080
+
+# Environment for VLM server
+ENV MODEL_NAME=Qwen/Qwen2-VL-2B-Instruct \
+    PYTHONPATH=/app
+
+# Health check — readiness endpoint (model must be loaded)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
+    CMD curl -f http://localhost:8080/ready || exit 1
+
+# Run the FastAPI VLM server
+CMD ["python", "-m", "uvicorn", "medexrag.vlm_server:app", "--host", "0.0.0.0", "--port", "8080"]

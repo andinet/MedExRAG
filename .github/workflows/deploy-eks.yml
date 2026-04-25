@@ -1,0 +1,172 @@
+# =============================================================================
+# Deploy to EKS — AWS Production Deployment
+# =============================================================================
+#
+# PURPOSE: Builds Docker images, pushes to ECR, deploys to EKS cluster.
+#
+# HOW THIS WORKFLOW FITS IN:
+#   - ci.yml: Runs on every push/PR (code quality — automatic)
+#   - mlops.yml: Runs on eval file changes + nightly (model quality — automatic)
+#   - deploy-eks.yml (THIS FILE): Manual only — you must click "Run workflow"
+#
+# TRIGGER CONDITIONS:
+#   - workflow_dispatch ONLY — never runs automatically
+#   - You trigger it from: GitHub → Actions tab → "Deploy to EKS" → "Run workflow"
+#
+# JOB DEPENDENCY GRAPH:
+#   lint-and-test (reuses ci.yml — runs lint + test + docker-build)
+#     └──→ build-and-push (build 3 Docker images → push to AWS ECR)
+#            └──→ deploy (kubectl apply K8s manifests to EKS cluster)
+#
+# PREREQUISITES:
+#   - AWS_DEPLOY_ROLE_ARN secret configured (see infra/README.md → AWS Setup)
+#   - EKS cluster provisioned via Terraform (infra/terraform/)
+#   - GitHub Environment with approval rules (optional but recommended)
+#
+# =============================================================================
+
+name: Deploy to EKS
+
+on:
+  workflow_dispatch:  # Manual trigger only — never runs automatically
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  id-token: write   # OIDC for AWS auth
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: medexrag
+
+jobs:
+  # --- Reuse existing CI checks ---
+  # "uses:" calls another workflow file — this runs ALL jobs from ci.yml
+  # (lint, test, docker-build) as a prerequisite before building images.
+  # This is GitHub's "reusable workflow" feature (workflow_call trigger).
+  lint-and-test:
+    uses: ./.github/workflows/ci.yml
+
+  # --- Build and push Docker images to ECR ---
+  build-and-push:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build base image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.base
+          push: false
+          load: true
+          tags: medexrag-base:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Streamlit
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.streamlit
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/medexrag-streamlit:${{ github.sha }}
+            ${{ steps.ecr-login.outputs.registry }}/medexrag-streamlit:latest
+
+      - name: Build and push VLM Worker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.vlm-worker
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/medexrag-vlm-worker:${{ github.sha }}
+            ${{ steps.ecr-login.outputs.registry }}/medexrag-vlm-worker:latest
+
+      - name: Build and push CLI
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.cli
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/medexrag-cli:${{ github.sha }}
+            ${{ steps.ecr-login.outputs.registry }}/medexrag-cli:latest
+
+  # --- Deploy to EKS ---
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}  # Requires GitHub Environment approval
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Update image tags in manifests
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_BASE="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          EFS_ID=$(cd infra/terraform && terraform output -raw efs_filesystem_id)
+
+          find infra/k8s -name "*.yaml" -exec sed -i \
+            -e "s|<ACCOUNT_ID>|${ACCOUNT_ID}|g" \
+            -e "s|<REGION>|${{ env.AWS_REGION }}|g" \
+            -e "s|<EFS_FILESYSTEM_ID>|${EFS_ID}|g" \
+            {} +
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f infra/k8s/namespace.yaml
+          kubectl apply -f infra/k8s/efs-pv.yaml
+          kubectl apply -f infra/k8s/observability/
+          kubectl apply -f infra/k8s/streamlit/
+          kubectl apply -f infra/k8s/vlm-worker/
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n medexrag rollout status deployment/streamlit --timeout=180s
+
+      - name: Print deployment status
+        run: |
+          echo "=== Pods ==="
+          kubectl -n medexrag get pods
+          echo ""
+          echo "=== Services ==="
+          kubectl -n medexrag get svc
+          echo ""
+          echo "=== Ingress ==="
+          kubectl -n medexrag get ingress

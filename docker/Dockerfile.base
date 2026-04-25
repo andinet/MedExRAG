@@ -1,0 +1,84 @@
+# =============================================================================
+# Multi-Stage Dockerfile for MedExRAG - Base Image
+# =============================================================================
+# This creates an optimized base image with all dependencies for the
+# Streamlit and CLI services. Uses multi-stage build for smaller final image.
+#
+# Build: docker build -f docker/Dockerfile.base -t medexrag-base:latest ..
+# Size: ~3-4GB (dependencies) + optional 5GB (pre-downloaded models)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Base System with Python
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS base
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create application directory
+WORKDIR /app
+
+# -----------------------------------------------------------------------------
+# Stage 2: Python Dependencies
+# -----------------------------------------------------------------------------
+FROM base AS dependencies
+
+# Copy requirements file
+COPY requirements.txt .
+
+# Install Python dependencies in layers for better caching
+# Install heavy ML dependencies first (changes rarely)
+RUN pip install --no-cache-dir \
+    torch>=2.1.0 \
+    transformers>=4.38.0 \
+    && pip install --no-cache-dir -r requirements.txt
+
+# -----------------------------------------------------------------------------
+# Stage 3: Application Code (Final Stage)
+# -----------------------------------------------------------------------------
+FROM dependencies AS final
+
+# Create necessary directories
+RUN mkdir -p /app/data/medical_kb \
+    /app/data/medical_literature \
+    /app/data/xray_images \
+    /app/data/analysis_results \
+    /root/.cache/huggingface
+
+# Copy application package
+COPY src/medexrag/ /app/medexrag/
+
+# Copy environment template for reference
+COPY .env.example .
+
+# Set default environment variables
+ENV MEDICAL_KB_PATH=/app/data/medical_kb \
+    LITERATURE_DIR=/app/data/medical_literature \
+    MODEL_NAME=Qwen/Qwen2-VL-2B-Instruct \
+    RAG_K_SOURCES=5 \
+    PYTHONPATH=/app
+
+# Health check (can be overridden by service-specific Dockerfiles)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)"
+
+# Default command (will be overridden by service-specific images)
+CMD ["python", "--version"]

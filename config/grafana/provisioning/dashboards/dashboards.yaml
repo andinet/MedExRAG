@@ -1,0 +1,25 @@
+# =============================================================================
+# Grafana Dashboard Provisioning
+# =============================================================================
+# This file tells Grafana where to find dashboard JSON files.
+# Dashboards are automatically loaded on startup.
+#
+# Documentation: https://grafana.com/docs/grafana/latest/administration/provisioning/
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  # ---------------------------------------------------------------------------
+  # Medical RAG Dashboards
+  # ---------------------------------------------------------------------------
+  - name: 'Medical RAG Dashboards'
+    orgId: 1
+    folder: 'Medical RAG'
+    folderUid: 'medical-rag'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

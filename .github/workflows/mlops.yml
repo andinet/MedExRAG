@@ -1,0 +1,574 @@
+# =============================================================================
+# MLOps Evaluation Pipeline — Model Quality CI
+# =============================================================================
+#
+# PURPOSE: Evaluates model and retrieval quality (separate from code quality in ci.yml).
+#
+# HOW GITHUB ACTIONS WORKS:
+#   - GitHub auto-discovers every .yml file in .github/workflows/
+#   - Each file is an independent workflow with its own triggers (the "on:" block)
+#   - Workflows only run when their trigger conditions are met
+#   - This file is NOT called by ci.yml — it runs independently
+#
+# TRIGGER CONDITIONS (any one of these will start this workflow):
+#   1. Push to main/develop — but ONLY if evaluation/pipeline files changed (path filter)
+#   2. Pull request to main — same path filter
+#   3. Nightly at 2 AM UTC — runs every day regardless of code changes
+#   4. Manual — click "Run workflow" button in GitHub → Actions tab
+#
+# JOB DEPENDENCY GRAPH:
+#   evaluation-tests
+#     ├──→ e2e-benchmarks ──────┬──→ quality-gate ──→ dvc-pipeline (main only)
+#     ├──→ retrieval-evaluation ─┘        │
+#     └──→ llm-judge (optional)           └──→ generate-report
+#
+# =============================================================================
+
+name: MLOps Evaluation Pipeline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRIGGERS: When does this workflow run?
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  # Trigger 1: Code pushed to main or develop
+  # "paths:" means it ONLY runs if the listed files were changed in the push
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/medexrag/evaluation/**'
+      - 'src/medexrag/pipeline.py'
+      - 'src/medexrag/agents.py'
+      - 'dvc.yaml'
+      - '.github/workflows/mlops.yml'
+
+  # Trigger 2: Pull request opened/updated against main
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/medexrag/evaluation/**'
+      - 'src/medexrag/pipeline.py'
+
+  # Trigger 3: Cron schedule — runs automatically even if no code changed
+  # This is what sends daily email notifications when jobs fail
+  schedule:
+    - cron: '0 2 * * *'  # 2 AM UTC daily
+
+  # Trigger 4: Manual — "Run workflow" button in GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      run_full_evaluation:
+        description: 'Run full evaluation suite'
+        required: false
+        default: 'true'
+        type: boolean
+      run_llm_judge:
+        description: 'Run LLM-as-Judge (requires API key)'
+        required: false
+        default: 'false'
+        type: boolean
+      evaluation_category:
+        description: 'Evaluation category to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - functional
+          - performance
+          - robustness
+
+env:
+  PYTHON_VERSION: '3.11'
+  PYTHONPATH: src
+
+jobs:
+  # ==========================================================================
+  # Job 1: Run Evaluation Tests
+  # ==========================================================================
+  evaluation-tests:
+    name: Evaluation Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov pytest-timeout
+          pip install chromadb sentence-transformers
+          pip install mlflow dvc
+
+      - name: Run evaluation tests
+        run: |
+          python -m pytest tests/test_evaluation.py -v \
+            --tb=short \
+            --timeout=120 \
+            --cov=src/medexrag/evaluation \
+            --cov-report=xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        if: always()
+        with:
+          files: ./coverage.xml
+          flags: evaluation
+          name: evaluation-coverage
+
+  # ==========================================================================
+  # Job 2: Run E2E Benchmarks
+  # ==========================================================================
+  e2e-benchmarks:
+    name: E2E Benchmarks
+    runs-on: ubuntu-latest
+    needs: evaluation-tests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install chromadb sentence-transformers
+
+      - name: Create metrics directory
+        run: mkdir -p metrics
+
+      - name: Run E2E benchmarks
+        run: |
+          python -c "
+          import json
+          from medexrag.evaluation.e2e_benchmarks import E2EBenchmark
+
+          # Run benchmarks with mock pipeline (no GPU needed in CI)
+          benchmark = E2EBenchmark()
+          category_results = benchmark.run_all(use_mock=True)
+
+          # Aggregate results across categories
+          total = sum(r.total_tests for r in category_results.values())
+          passed = sum(r.passed_tests for r in category_results.values())
+          failed = sum(r.failed_tests for r in category_results.values())
+          pass_rate = passed / total if total > 0 else 0.0
+
+          # Build serializable output
+          output = {
+              'summary': {
+                  'total': total,
+                  'passed': passed,
+                  'failed': failed,
+                  'pass_rate': pass_rate,
+              },
+              'categories': {k: v.to_dict() for k, v in category_results.items()},
+          }
+
+          # Save results
+          with open('metrics/e2e_results.json', 'w') as f:
+              json.dump(output, f, indent=2)
+
+          # Print summary
+          print('=' * 60)
+          print('E2E BENCHMARK RESULTS')
+          print('=' * 60)
+          print(f'Total tests: {total}')
+          print(f'Passed: {passed}')
+          print(f'Failed: {failed}')
+          print(f'Pass rate: {pass_rate:.1%}')
+          print('=' * 60)
+
+          # Fail if pass rate below threshold
+          if pass_rate < 0.7:
+              print('ERROR: Pass rate below 70% threshold!')
+              exit(1)
+          "
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-benchmark-results
+          path: metrics/e2e_results.json
+
+  # ==========================================================================
+  # Job 3: Run Retrieval Quality Evaluation
+  # ==========================================================================
+  retrieval-evaluation:
+    name: Retrieval Quality Metrics
+    runs-on: ubuntu-latest
+    needs: evaluation-tests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install chromadb sentence-transformers
+
+      - name: Create metrics directory
+        run: mkdir -p metrics
+
+      - name: Run retrieval evaluation
+        run: |
+          python -c "
+          import json
+          from medexrag.evaluation.retrieval_metrics import RetrievalEvaluator
+
+          evaluator = RetrievalEvaluator(default_k=5)
+
+          # Sample evaluation queries (would use real test set in production)
+          test_queries = [
+              {
+                  'query': 'pneumonia consolidation',
+                  'retrieved_ids': ['doc1', 'doc2', 'doc3', 'doc4', 'doc5'],
+                  'relevant_ids': ['doc1', 'doc3', 'doc6']
+              },
+              {
+                  'query': 'cardiomegaly findings',
+                  'retrieved_ids': ['doc10', 'doc11', 'doc12', 'doc13', 'doc14'],
+                  'relevant_ids': ['doc10', 'doc12']
+              },
+              {
+                  'query': 'pleural effusion',
+                  'retrieved_ids': ['doc20', 'doc21', 'doc22', 'doc23', 'doc24'],
+                  'relevant_ids': ['doc20', 'doc21', 'doc22']
+              }
+          ]
+
+          results = evaluator.evaluate_batch(test_queries)
+
+          # Save results
+          with open('metrics/retrieval_metrics.json', 'w') as f:
+              json.dump(results, f, indent=2)
+
+          # Print summary
+          print('=' * 60)
+          print('RETRIEVAL QUALITY METRICS')
+          print('=' * 60)
+          agg = results['aggregate']
+          print(f\"Precision@5: {agg['precision_at_k']['mean']:.3f} (±{agg['precision_at_k']['std']:.3f})\")
+          print(f\"Recall@5:    {agg['recall_at_k']['mean']:.3f} (±{agg['recall_at_k']['std']:.3f})\")
+          print(f\"MRR:         {agg['mrr']['mean']:.3f} (±{agg['mrr']['std']:.3f})\")
+          print(f\"NDCG@5:      {agg['ndcg_at_k']['mean']:.3f} (±{agg['ndcg_at_k']['std']:.3f})\")
+          print(f\"Hit Rate@5:  {agg['hit_rate_at_k']['mean']:.3f} (±{agg['hit_rate_at_k']['std']:.3f})\")
+          print('=' * 60)
+          "
+
+      - name: Upload retrieval metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-metrics
+          path: metrics/retrieval_metrics.json
+
+  # ==========================================================================
+  # Job 4: LLM-as-Judge Evaluation (Optional)
+  # ==========================================================================
+  llm-judge:
+    name: LLM Judge Evaluation
+    runs-on: ubuntu-latest
+    needs: evaluation-tests
+    if: github.event.inputs.run_llm_judge == 'true' || github.event_name == 'schedule'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install openai
+
+      - name: Create metrics directory
+        run: mkdir -p metrics
+
+      - name: Run LLM Judge evaluation
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -c "
+          import json
+          import os
+          from medexrag.evaluation.llm_judge import LLMJudge
+
+          # Use mock if no API key
+          use_mock = not os.environ.get('OPENAI_API_KEY')
+
+          judge = LLMJudge(use_mock=use_mock)
+
+          # Sample outputs to evaluate
+          sample_output = '''
+          FINDINGS:
+          Chest X-ray PA view demonstrates right lower lobe consolidation
+          with air bronchograms. No pleural effusion detected.
+
+          IMPRESSION:
+          Findings consistent with community-acquired pneumonia.
+
+          RECOMMENDATION:
+          Clinical correlation recommended.
+          '''
+
+          sample_context = 'ACR guidelines: Lobar consolidation is typical of bacterial pneumonia.'
+          sample_question = 'Analyze chest X-ray for pneumonia'
+
+          result = judge.evaluate_all(sample_output, sample_context, sample_question)
+
+          # Save results
+          with open('metrics/llm_judge_results.json', 'w') as f:
+              json.dump(result.to_dict(), f, indent=2)
+
+          # Print report
+          print(judge.generate_report(result))
+          "
+
+      - name: Upload LLM judge results
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-judge-results
+          path: metrics/llm_judge_results.json
+
+  # ==========================================================================
+  # Job 5: Quality Gate Check
+  # ==========================================================================
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [e2e-benchmarks, retrieval-evaluation]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: metrics
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run quality gate check
+        run: |
+          python -c "
+          import json
+          import sys
+          from pathlib import Path
+
+          print('=' * 60)
+          print('QUALITY GATE CHECK')
+          print('=' * 60)
+
+          gates_passed = True
+          results = {}
+
+          # Check E2E benchmark results
+          e2e_path = Path('metrics/e2e-benchmark-results/e2e_results.json')
+          if e2e_path.exists():
+              with open(e2e_path) as f:
+                  e2e = json.load(f)
+              pass_rate = e2e['summary']['pass_rate']
+              threshold = 0.7
+              passed = pass_rate >= threshold
+              results['e2e_pass_rate'] = {'value': pass_rate, 'threshold': threshold, 'passed': passed}
+              print(f\"E2E Pass Rate: {pass_rate:.1%} (threshold: {threshold:.0%}) {'PASS' if passed else 'FAIL'}\")
+              if not passed:
+                  gates_passed = False
+
+          # Check retrieval metrics
+          retrieval_path = Path('metrics/retrieval-metrics/retrieval_metrics.json')
+          if retrieval_path.exists():
+              with open(retrieval_path) as f:
+                  retrieval = json.load(f)
+              precision = retrieval['aggregate']['precision_at_k']['mean']
+              threshold = 0.3
+              passed = precision >= threshold
+              results['precision_at_k'] = {'value': precision, 'threshold': threshold, 'passed': passed}
+              print(f\"Precision@5:  {precision:.3f} (threshold: {threshold:.2f}) {'PASS' if passed else 'FAIL'}\")
+              if not passed:
+                  gates_passed = False
+
+              mrr = retrieval['aggregate']['mrr']['mean']
+              threshold = 0.5
+              passed = mrr >= threshold
+              results['mrr'] = {'value': mrr, 'threshold': threshold, 'passed': passed}
+              print(f\"MRR:          {mrr:.3f} (threshold: {threshold:.2f}) {'PASS' if passed else 'FAIL'}\")
+              if not passed:
+                  gates_passed = False
+
+          print('=' * 60)
+
+          if gates_passed:
+              print('ALL QUALITY GATES PASSED')
+              sys.exit(0)
+          else:
+              print('QUALITY GATES FAILED')
+              sys.exit(1)
+          "
+
+  # ==========================================================================
+  # Job 6: DVC Pipeline (for data versioning)
+  # ==========================================================================
+  dvc-pipeline:
+    name: DVC Pipeline
+    runs-on: ubuntu-latest
+    needs: quality-gate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install DVC
+        run: |
+          python -m pip install --upgrade pip
+          pip install dvc
+
+      - name: Configure DVC
+        run: |
+          # Create local storage for demo
+          mkdir -p /tmp/dvc-storage
+          dvc remote modify local_storage url /tmp/dvc-storage
+
+      - name: Check DVC status
+        run: |
+          echo "DVC Version: $(dvc version)"
+          echo ""
+          echo "DVC Status:"
+          dvc status || echo "No DVC files tracked yet"
+          echo ""
+          echo "DVC DAG:"
+          dvc dag || echo "No pipeline defined yet"
+
+  # ==========================================================================
+  # Job 7: Generate Report
+  # ==========================================================================
+  generate-report:
+    name: Generate Evaluation Report
+    runs-on: ubuntu-latest
+    needs: [e2e-benchmarks, retrieval-evaluation, quality-gate]
+    if: always()
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: metrics
+
+      - name: Generate markdown report
+        run: |
+          python -c "
+          import json
+          from pathlib import Path
+          from datetime import datetime
+
+          report_lines = [
+              '# MedExRAG MLOps Evaluation Report',
+              '',
+              f'**Generated:** {datetime.now().isoformat()}',
+              f'**Workflow Run:** ${{ github.run_number }}',
+              f'**Commit:** ${{ github.sha }}',
+              '',
+              '## Summary',
+              '',
+          ]
+
+          # E2E Results
+          e2e_path = Path('metrics/e2e-benchmark-results/e2e_results.json')
+          if e2e_path.exists():
+              with open(e2e_path) as f:
+                  e2e = json.load(f)
+              report_lines.extend([
+                  '### End-to-End Benchmarks',
+                  '',
+                  f\"- **Total Tests:** {e2e['summary']['total']}\",
+                  f\"- **Passed:** {e2e['summary']['passed']}\",
+                  f\"- **Failed:** {e2e['summary']['failed']}\",
+                  f\"- **Pass Rate:** {e2e['summary']['pass_rate']:.1%}\",
+                  '',
+              ])
+
+          # Retrieval Metrics
+          retrieval_path = Path('metrics/retrieval-metrics/retrieval_metrics.json')
+          if retrieval_path.exists():
+              with open(retrieval_path) as f:
+                  retrieval = json.load(f)
+              agg = retrieval['aggregate']
+              report_lines.extend([
+                  '### Retrieval Quality Metrics',
+                  '',
+                  '| Metric | Mean | Std Dev |',
+                  '|--------|------|---------|',
+                  f\"| Precision@5 | {agg['precision_at_k']['mean']:.3f} | {agg['precision_at_k']['std']:.3f} |\",
+                  f\"| Recall@5 | {agg['recall_at_k']['mean']:.3f} | {agg['recall_at_k']['std']:.3f} |\",
+                  f\"| MRR | {agg['mrr']['mean']:.3f} | {agg['mrr']['std']:.3f} |\",
+                  f\"| NDCG@5 | {agg['ndcg_at_k']['mean']:.3f} | {agg['ndcg_at_k']['std']:.3f} |\",
+                  f\"| Hit Rate@5 | {agg['hit_rate_at_k']['mean']:.3f} | {agg['hit_rate_at_k']['std']:.3f} |\",
+                  '',
+              ])
+
+          # Write report
+          with open('metrics/EVALUATION_REPORT.md', 'w') as f:
+              f.write('\n'.join(report_lines))
+
+          print('Report generated: metrics/EVALUATION_REPORT.md')
+          "
+
+      - name: Upload evaluation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-report
+          path: metrics/EVALUATION_REPORT.md
+
+      - name: Post report to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('metrics/EVALUATION_REPORT.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });

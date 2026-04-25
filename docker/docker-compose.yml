@@ -1,0 +1,255 @@
+# =============================================================================
+# Docker Compose for MedExRAG - Medical Expert X-ray RAG System
+# =============================================================================
+# Services:
+#   - streamlit: Web UI on port 8501, metrics on port 8000
+#   - prometheus: Metrics collection on port 9090 (M2)
+#   - otel-collector: OpenTelemetry trace collection (M3)
+#   - jaeger: Distributed tracing UI on port 16686 (M3)
+#   - grafana: Dashboards and visualization on port 3000 (M4)
+#   - cli-worker: Batch processing (on-demand via docker compose run)
+#
+# Usage (run from docker/ directory):
+#   docker compose up streamlit prometheus       # Start web UI + metrics
+#   docker compose up streamlit jaeger           # Start web UI + tracing
+#   docker compose up streamlit prometheus grafana  # Full observability
+#   docker compose up                            # Start all services
+#   docker compose run cli-worker ingest /app/data/medical_literature
+#   docker compose run cli-worker analyze /app/data/xray_images/chest.dcm --rag
+#   docker compose logs -f streamlit             # View logs
+#   docker compose down                          # Stop all services
+#
+# Monitoring:
+#   - Grafana UI: http://localhost:3000 (admin/admin)
+#   - Prometheus UI: http://localhost:9090
+#   - Jaeger UI: http://localhost:16686
+#   - Metrics endpoint: http://localhost:8002/metrics
+#   - OTEL Health: http://localhost:13133
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # Streamlit Web Application Service
+  # ===========================================================================
+  streamlit:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.streamlit
+    image: medexrag-streamlit:latest
+    container_name: medexrag-streamlit
+    ports:
+      - "8501:8501"
+      - "8002:8000"  # Prometheus metrics endpoint (M2) - mapped to 8002 to avoid conflicts
+    volumes:
+      # Persistent data volumes
+      - ../data/medical_kb:/app/data/medical_kb
+      - ../data/medical_literature:/app/data/medical_literature
+      - ../data/xray_images:/app/data/xray_images
+      - ../data/analysis_results:/app/data/analysis_results
+      # Shared HuggingFace cache (persists model downloads)
+      - huggingface_cache:/root/.cache/huggingface
+    env_file:
+      - ../.env  # Load LangSmith and observability settings
+    environment:
+      - MEDICAL_KB_PATH=/app/data/medical_kb
+      - LITERATURE_DIR=/app/data/medical_literature
+      - MODEL_NAME=Qwen/Qwen2-VL-2B-Instruct
+      - RAG_K_SOURCES=5
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      # Observability settings (can be overridden by .env)
+      - LOG_FORMAT=json
+      - LOG_LEVEL=INFO
+      # OpenTelemetry settings (M3)
+      - OTEL_ENABLED=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      - OTEL_SERVICE_NAME=medexrag-streamlit
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+        reservations:
+          memory: 6G
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ===========================================================================
+  # CLI Worker Service (On-Demand)
+  # ===========================================================================
+  cli-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cli
+    image: medexrag-cli:latest
+    container_name: medexrag-cli
+    volumes:
+      # Shared volumes with streamlit
+      - ../data/medical_kb:/app/data/medical_kb
+      - ../data/medical_literature:/app/data/medical_literature
+      - ../data/xray_images:/app/data/xray_images
+      - ../data/analysis_results:/app/data/analysis_results
+      - huggingface_cache:/root/.cache/huggingface
+    env_file:
+      - ../.env  # Load LangSmith and observability settings
+    environment:
+      - MEDICAL_KB_PATH=/app/data/medical_kb
+      - LITERATURE_DIR=/app/data/medical_literature
+      - MODEL_NAME=Qwen/Qwen2-VL-2B-Instruct
+      - RAG_K_SOURCES=5
+      # Observability settings (can be overridden by .env)
+      - LOG_FORMAT=json
+      - LOG_LEVEL=INFO
+      # OpenTelemetry settings (M3)
+      - OTEL_ENABLED=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317
+      - OTEL_SERVICE_NAME=medexrag-cli
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+    profiles:
+      - tools  # Only starts when explicitly requested
+    # No restart policy (on-demand service)
+
+  # ===========================================================================
+  # Prometheus Metrics Service (M2)
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: medexrag-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../config/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../config/observability/alerting:/etc/prometheus/alerts:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    restart: unless-stopped
+    depends_on:
+      - streamlit
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ===========================================================================
+  # OpenTelemetry Collector Service (M3)
+  # ===========================================================================
+  # Receives traces from application and forwards to Jaeger
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.88.0
+    container_name: medexrag-otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "13133:13133" # Health check
+      - "8889:8889"   # Prometheus metrics from collector
+    volumes:
+      - ../config/observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:13133"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # Jaeger Distributed Tracing UI (M3)
+  # ===========================================================================
+  # Stores and visualizes distributed traces
+  jaeger:
+    image: jaegertracing/all-in-one:1.51
+    container_name: medexrag-jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14268:14268" # Accept thrift directly (optional)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:16686"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # Grafana Visualization Service (M4)
+  # ===========================================================================
+  # Dashboards for metrics visualization and alerting
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: medexrag-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      # Provisioning configuration (auto-setup datasources and dashboards)
+      - ../config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../config/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Persistent storage for Grafana data
+      - grafana_data:/var/lib/grafana
+    environment:
+      # Default admin credentials (change in production!)
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Allow anonymous access for demo purposes (disable in production)
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      # Server settings
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      # Disable update checks and analytics
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      # Enable unified alerting only (disable legacy)
+      - GF_ALERTING_ENABLED=false
+      - GF_UNIFIED_ALERTING_ENABLED=true
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# =============================================================================
+# Named Volumes
+# =============================================================================
+volumes:
+  # HuggingFace model cache - persists across container rebuilds
+  # Contains ~5GB of downloaded models
+  huggingface_cache:
+    driver: local
+  # Prometheus data storage (M2)
+  prometheus_data:
+    driver: local
+  # Grafana data storage (M4)
+  grafana_data:
+    driver: local
+
+# =============================================================================
+# Networks (using default bridge network)
+# =============================================================================
+# All services communicate via default Docker bridge network

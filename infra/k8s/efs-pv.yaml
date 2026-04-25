@@ -1,0 +1,43 @@
+# =============================================================================
+# EFS Persistent Volume + Claim
+# =============================================================================
+# Shared ReadWriteMany storage for ChromaDB, HuggingFace cache, and data.
+# Replace <EFS_FILESYSTEM_ID> with output from: terraform output efs_filesystem_id
+# =============================================================================
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: medexrag-efs-pv
+spec:
+  capacity:
+    storage: 100Gi  # EFS is elastic, this is a nominal value
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: efs-sc
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: <EFS_FILESYSTEM_ID>  # Replace with terraform output
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+provisioner: efs.csi.aws.com
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: medexrag-efs
+  namespace: medexrag
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 100Gi

@@ -1,0 +1,47 @@
+# =============================================================================
+# Grafana Datasource Provisioning
+# =============================================================================
+# This file auto-configures datasources when Grafana starts.
+# Grafana will automatically connect to Prometheus without manual setup.
+#
+# Documentation: https://grafana.com/docs/grafana/latest/administration/provisioning/
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  # ---------------------------------------------------------------------------
+  # Prometheus - Primary metrics datasource
+  # ---------------------------------------------------------------------------
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Time interval for data queries
+      timeInterval: "15s"
+      # HTTP method for queries
+      httpMethod: POST
+      # Manage alerts via this datasource
+      manageAlerts: true
+      # Prometheus type and version
+      prometheusType: Prometheus
+      prometheusVersion: "2.47.0"
+
+  # ---------------------------------------------------------------------------
+  # Jaeger - Distributed tracing datasource (optional integration)
+  # ---------------------------------------------------------------------------
+  - name: Jaeger
+    type: jaeger
+    uid: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+    jsonData:
+      # Enable trace to logs correlation
+      tracesToLogs:
+        datasourceUid: ''
+        tags: ['request.id', 'session.id']

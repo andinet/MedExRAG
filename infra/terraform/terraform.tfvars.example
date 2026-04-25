@@ -1,0 +1,25 @@
+# =============================================================================
+# Example Terraform Variables — Copy to terraform.tfvars and customize
+# =============================================================================
+# cp terraform.tfvars.example terraform.tfvars
+# Then edit terraform.tfvars with your settings
+# =============================================================================
+
+region       = "us-east-1"
+cluster_name = "medexrag"
+environment  = "production"
+
+# Node sizing (adjust based on budget/workload)
+cpu_instance_type = "t3.xlarge"   # 4 vCPU, 16GB — $120/mo
+cpu_min_size      = 1
+cpu_max_size      = 3
+cpu_desired_size  = 1
+
+gpu_instance_type = "g4dn.xlarge" # T4 16GB GPU — $0.53/hr spot
+gpu_max_size      = 1             # Max 1 GPU node (scale-to-zero)
+
+tags = {
+  Project     = "MedExRAG"
+  ManagedBy   = "Terraform"
+  Owner       = "your-name"
+}

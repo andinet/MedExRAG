@@ -1,0 +1,20 @@
+[core]
+    autostage = true
+
+# Configure a remote for `dvc push` / `dvc pull` to share data outside the repo.
+# Uncomment and edit one of the examples below, or define your own.
+#
+# [remote "s3_storage"]
+#     url = s3://bucket-name/dvc-storage
+#
+# [remote "gcs_storage"]
+#     url = gs://bucket-name/dvc-storage
+#
+# [remote "azure_storage"]
+#     url = azure://container-name/dvc-storage
+#
+# [remote "local_storage"]
+#     url = /path/to/local/dvc-storage
+#
+# After defining a remote, set it as default with:
+#   dvc remote default <remote-name>

@@ -1,0 +1,19 @@
+# =============================================================================
+# CLI Worker Service
+# =============================================================================
+# Purpose: Command-line interface for batch processing and automation
+# Ports: None (internal service)
+# Resources: 4-8GB RAM, optional GPU
+# Build: docker build -f docker/Dockerfile.cli -t medexrag-cli:latest ..
+# Run: docker compose -f docker/docker-compose.yml run cli-worker ingest /app/data/medical_literature
+# =============================================================================
+
+FROM medexrag-base:latest
+
+# No ports to expose (CLI service)
+
+# Set entrypoint to CLI tool
+ENTRYPOINT ["python", "-m", "medexrag.cli"]
+
+# Default command shows help
+CMD ["--help"]

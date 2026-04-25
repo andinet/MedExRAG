@@ -1,0 +1,84 @@
+# =============================================================================
+# VLM Worker — GPU Node, Scale-to-Zero
+# =============================================================================
+# Runs the FastAPI VLM inference server on a GPU node.
+# KEDA manages replicas: 0 when idle, 1 when requests are pending.
+# Karpenter provisions/terminates the GPU node automatically.
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vlm-worker
+  namespace: medexrag
+  labels:
+    app: vlm-worker
+    component: vlm-inference
+spec:
+  replicas: 0  # KEDA manages this — starts at 0
+  selector:
+    matchLabels:
+      app: vlm-worker
+  template:
+    metadata:
+      labels:
+        app: vlm-worker
+        component: vlm-inference
+    spec:
+      # Only schedule on GPU nodes
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      nodeSelector:
+        node-type: gpu
+      containers:
+        - name: vlm-worker
+          image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/medexrag-vlm-worker:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: MODEL_NAME
+              value: "Qwen/Qwen2-VL-2B-Instruct"
+            - name: PYTHONPATH
+              value: "/app"
+            - name: HF_HOME
+              value: "/cache/huggingface"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "12Gi"
+              nvidia.com/gpu: "1"
+          # Readiness: only route traffic after model is loaded (~60-90s)
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12  # Allow up to 2 min for model loading
+          # Liveness: restart if server crashes
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+          volumeMounts:
+            - name: efs-data
+              mountPath: /cache/huggingface
+              subPath: huggingface_cache
+            - name: efs-data
+              mountPath: /app/data/medical_kb
+              subPath: medical_kb
+      volumes:
+        - name: efs-data
+          persistentVolumeClaim:
+            claimName: medexrag-efs

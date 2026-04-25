@@ -1,0 +1,136 @@
+# =============================================================================
+# MedExRAG - Project Configuration
+# =============================================================================
+# This file configures Python tools used in development and CI/CD:
+# - black: Code formatting
+# - isort: Import sorting
+# - pytest: Testing
+# - flake8: Linting (uses .flake8 or pyproject.toml)
+#
+# Learn more: https://pip.pypa.io/en/stable/reference/build-system/pyproject-toml/
+# =============================================================================
+
+[project]
+name = "medexrag"
+version = "1.0.0"
+description = "MedExRAG - Medical Expert X-ray Analysis with RAG and Multi-Agent LangGraph"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# =============================================================================
+# Black - Code Formatter
+# =============================================================================
+# Black enforces consistent code style automatically
+# Run: black src/
+# Check only: black --check src/
+# =============================================================================
+
+[tool.black]
+line-length = 120
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | venv
+    | __pycache__
+    | \.mypy_cache
+    | \.pytest_cache
+    | build
+    | dist
+    | node_modules
+    | data
+)/
+'''
+
+# =============================================================================
+# isort - Import Sorter
+# =============================================================================
+# isort organizes imports into sections: stdlib, third-party, local
+# Run: isort src/
+# Check only: isort --check-only src/
+# =============================================================================
+
+[tool.isort]
+profile = "black"  # Compatible with black formatting
+line_length = 120
+skip_gitignore = true
+skip = [".venv", "venv", "__pycache__", "data"]
+known_first_party = ["medexrag"]
+src_paths = ["src"]
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+
+# =============================================================================
+# pytest - Testing Framework
+# =============================================================================
+# pytest discovers and runs tests
+# Run: pytest
+# Run with coverage: pytest --cov=src/medexrag
+# =============================================================================
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",                    # Verbose output
+    "--tb=short",            # Short traceback format
+    "-ra",                   # Show summary of all except passed
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_gpu: marks tests that require GPU",
+    "requires_vlm: marks tests that require VLM model",
+    "integration: marks integration tests",
+]
+
+# =============================================================================
+# Coverage - Test Coverage Reporting
+# =============================================================================
+# Measures how much code is covered by tests
+# Run: pytest --cov=src/medexrag --cov-report=html
+# =============================================================================
+
+[tool.coverage.run]
+source = ["src/medexrag"]
+omit = [
+    "tests/*",
+    ".venv/*",
+    "venv/*",
+    "setup.py",
+    "conftest.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+# =============================================================================
+# MyPy - Static Type Checker (Optional)
+# =============================================================================
+# Checks type annotations for correctness
+# Run: mypy src/medexrag/
+# =============================================================================
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = [
+    ".venv",
+    "venv",
+    "tests",
+]

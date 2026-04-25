@@ -1,0 +1,84 @@
+# =============================================================================
+# CLI Worker Job Template — On-Demand Batch Processing
+# =============================================================================
+# Run batch X-ray analysis as a Kubernetes Job.
+#
+# Usage:
+#   kubectl -n medexrag create job batch-$(date +%s) \
+#     --from=cronjob/medexrag-cli-template \
+#     -- batch /app/data/xray_images --output /app/data/analysis_results --rag
+#
+# Or directly:
+#   kubectl -n medexrag apply -f - <<EOF
+#   apiVersion: batch/v1
+#   kind: Job
+#   metadata:
+#     name: batch-analysis-001
+#   spec:
+#     template:
+#       spec:
+#         ... (same as below)
+#   EOF
+# =============================================================================
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: medexrag-cli-example
+  namespace: medexrag
+  labels:
+    app: medexrag-cli
+    component: batch-worker
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600  # 1 hour max
+  template:
+    metadata:
+      labels:
+        app: medexrag-cli
+    spec:
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      restartPolicy: Never
+      containers:
+        - name: cli
+          image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/medexrag-cli:latest
+          args: ["batch", "/app/data/xray_images", "--output", "/app/data/analysis_results", "--rag"]
+          env:
+            - name: MEDICAL_KB_PATH
+              value: "/app/data/medical_kb"
+            - name: MODEL_NAME
+              value: "Qwen/Qwen2-VL-2B-Instruct"
+            - name: HF_HOME
+              value: "/cache/huggingface"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "12Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: efs-data
+              mountPath: /app/data/medical_kb
+              subPath: medical_kb
+            - name: efs-data
+              mountPath: /app/data/medical_literature
+              subPath: medical_literature
+            - name: efs-data
+              mountPath: /app/data/xray_images
+              subPath: xray_images
+            - name: efs-data
+              mountPath: /app/data/analysis_results
+              subPath: analysis_results
+            - name: efs-data
+              mountPath: /cache/huggingface
+              subPath: huggingface_cache
+      volumes:
+        - name: efs-data
+          persistentVolumeClaim:
+            claimName: medexrag-efs

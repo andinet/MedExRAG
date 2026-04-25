@@ -1,0 +1,32 @@
+# =============================================================================
+# ALB Ingress — Public HTTPS Access to Streamlit
+# =============================================================================
+# Uses AWS ALB Ingress Controller. Creates an Application Load Balancer.
+#
+# Optional: Add ACM certificate ARN for HTTPS:
+#   alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:...
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medexrag-ingress
+  namespace: medexrag
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /_stcore/health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: streamlit
+                port:
+                  number: 8501

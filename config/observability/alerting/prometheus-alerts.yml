@@ -1,0 +1,197 @@
+# =============================================================================
+# Prometheus Alerting Rules for Medical X-Ray RAG Application
+# =============================================================================
+# These rules define alert conditions for the application.
+# Alerts are evaluated by Prometheus and can be sent to Alertmanager.
+#
+# Alert severity levels:
+#   - critical: Immediate action required (system down, data loss risk)
+#   - warning: Attention needed (degraded performance, approaching limits)
+#   - info: Informational (notable events, trends)
+#
+# Documentation: https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
+# =============================================================================
+
+groups:
+  # ---------------------------------------------------------------------------
+  # VLM Inference Alerts
+  # ---------------------------------------------------------------------------
+  - name: vlm_alerts
+    rules:
+      # High VLM inference latency (p95 > 30 seconds)
+      - alert: HighVLMLatency
+        expr: histogram_quantile(0.95, sum(rate(medical_rag_vlm_inference_seconds_bucket[5m])) by (le)) > 30
+        for: 2m
+        labels:
+          severity: warning
+          component: vlm
+        annotations:
+          summary: "High VLM inference latency detected"
+          description: "95th percentile VLM latency is {{ $value | printf \"%.2f\" }}s (threshold: 30s). This may indicate GPU memory pressure or model issues."
+          runbook_url: "https://github.com/your-repo/docs/TROUBLESHOOTING.md#high-vlm-latency"
+
+      # Critical VLM latency (p95 > 60 seconds)
+      - alert: CriticalVLMLatency
+        expr: histogram_quantile(0.95, sum(rate(medical_rag_vlm_inference_seconds_bucket[5m])) by (le)) > 60
+        for: 1m
+        labels:
+          severity: critical
+          component: vlm
+        annotations:
+          summary: "Critical VLM inference latency"
+          description: "95th percentile VLM latency is {{ $value | printf \"%.2f\" }}s (threshold: 60s). Users are likely experiencing timeouts."
+          runbook_url: "https://github.com/your-repo/docs/TROUBLESHOOTING.md#critical-vlm-latency"
+
+      # No VLM requests in 10 minutes (potential service issue)
+      - alert: VLMNoRequests
+        expr: sum(rate(medical_rag_vlm_inference_seconds_count[10m])) == 0
+        for: 10m
+        labels:
+          severity: info
+          component: vlm
+        annotations:
+          summary: "No VLM inference requests detected"
+          description: "No VLM inference requests in the last 10 minutes. This may indicate the service is not being used or is down."
+
+  # ---------------------------------------------------------------------------
+  # Error Rate Alerts
+  # ---------------------------------------------------------------------------
+  - name: error_alerts
+    rules:
+      # High error rate (> 10%)
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(medical_rag_analysis_requests_total{status="error"}[5m]))
+            /
+            sum(rate(medical_rag_analysis_requests_total[5m]))
+          ) * 100 > 10
+        for: 2m
+        labels:
+          severity: warning
+          component: pipeline
+        annotations:
+          summary: "High analysis error rate detected"
+          description: "Error rate is {{ $value | printf \"%.1f\" }}% (threshold: 10%). Check application logs for error details."
+          runbook_url: "https://github.com/your-repo/docs/TROUBLESHOOTING.md#high-error-rate"
+
+      # Critical error rate (> 25%)
+      - alert: CriticalErrorRate
+        expr: |
+          (
+            sum(rate(medical_rag_analysis_requests_total{status="error"}[5m]))
+            /
+            sum(rate(medical_rag_analysis_requests_total[5m]))
+          ) * 100 > 25
+        for: 1m
+        labels:
+          severity: critical
+          component: pipeline
+        annotations:
+          summary: "Critical analysis error rate"
+          description: "Error rate is {{ $value | printf \"%.1f\" }}% (threshold: 25%). Immediate investigation required."
+          runbook_url: "https://github.com/your-repo/docs/TROUBLESHOOTING.md#critical-error-rate"
+
+  # ---------------------------------------------------------------------------
+  # Knowledge Base Alerts
+  # ---------------------------------------------------------------------------
+  - name: knowledge_base_alerts
+    rules:
+      # Empty vector store (no literature loaded)
+      - alert: VectorStoreEmpty
+        expr: medical_rag_vector_store_chunks_total == 0
+        for: 1m
+        labels:
+          severity: warning
+          component: vector_store
+        annotations:
+          summary: "Vector store is empty"
+          description: "The medical knowledge base has 0 chunks. RAG-enhanced analysis will not have literature context. Run: docker-compose run cli-worker ingest /app/medical_literature"
+          runbook_url: "https://github.com/your-repo/docs/TROUBLESHOOTING.md#empty-knowledge-base"
+
+      # Low knowledge base size (< 100 chunks)
+      - alert: LowKnowledgeBaseSize
+        expr: medical_rag_vector_store_chunks_total < 100 and medical_rag_vector_store_chunks_total > 0
+        for: 5m
+        labels:
+          severity: info
+          component: vector_store
+        annotations:
+          summary: "Knowledge base size is low"
+          description: "The medical knowledge base has only {{ $value }} chunks. Consider ingesting more medical literature for better RAG results."
+
+  # ---------------------------------------------------------------------------
+  # Pipeline Performance Alerts
+  # ---------------------------------------------------------------------------
+  - name: pipeline_alerts
+    rules:
+      # High pipeline latency (p95 > 60 seconds)
+      - alert: HighPipelineLatency
+        expr: histogram_quantile(0.95, sum(rate(medical_rag_pipeline_total_seconds_bucket[5m])) by (le)) > 60
+        for: 2m
+        labels:
+          severity: warning
+          component: pipeline
+        annotations:
+          summary: "High pipeline latency detected"
+          description: "95th percentile pipeline latency is {{ $value | printf \"%.2f\" }}s (threshold: 60s). Check VLM and vector search performance."
+          runbook_url: "https://github.com/your-repo/docs/TROUBLESHOOTING.md#high-pipeline-latency"
+
+      # Vector search latency high (> 5 seconds)
+      - alert: HighVectorSearchLatency
+        expr: histogram_quantile(0.95, sum(rate(medical_rag_vector_search_seconds_bucket[5m])) by (le)) > 5
+        for: 2m
+        labels:
+          severity: warning
+          component: vector_store
+        annotations:
+          summary: "High vector search latency"
+          description: "95th percentile vector search latency is {{ $value | printf \"%.2f\" }}s (threshold: 5s). Knowledge base may need optimization."
+
+  # ---------------------------------------------------------------------------
+  # Multi-Agent Workflow Alerts
+  # ---------------------------------------------------------------------------
+  - name: agent_alerts
+    rules:
+      # Agent step taking too long (> 30 seconds)
+      - alert: SlowAgentStep
+        expr: |
+          (
+            sum(rate(medical_rag_agent_step_seconds_sum[5m])) by (agent)
+            /
+            sum(rate(medical_rag_agent_step_seconds_count[5m])) by (agent)
+          ) > 30
+        for: 2m
+        labels:
+          severity: warning
+          component: agents
+        annotations:
+          summary: "Agent step is slow: {{ $labels.agent }}"
+          description: "Average duration for {{ $labels.agent }} agent is {{ $value | printf \"%.2f\" }}s (threshold: 30s)."
+
+  # ---------------------------------------------------------------------------
+  # Service Health Alerts
+  # ---------------------------------------------------------------------------
+  - name: service_health_alerts
+    rules:
+      # Streamlit service down (no metrics scraped)
+      - alert: StreamlitServiceDown
+        expr: up{job="streamlit"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: streamlit
+        annotations:
+          summary: "Streamlit service is down"
+          description: "The Streamlit web application is not responding. Check docker-compose logs streamlit for details."
+          runbook_url: "https://github.com/your-repo/docs/TROUBLESHOOTING.md#service-down"
+
+      # High memory usage warning (placeholder - requires node_exporter)
+      # - alert: HighMemoryUsage
+      #   expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+      #   for: 5m
+      #   labels:
+      #     severity: warning
+      #   annotations:
+      #     summary: "High memory usage"
+      #     description: "Memory usage is {{ $value | printf \"%.1f\" }}%"

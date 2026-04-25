@@ -1,0 +1,52 @@
+# =============================================================================
+# Docker Compose GPU Override
+# =============================================================================
+# This file enables GPU support for NVIDIA GPUs
+#
+# Requirements:
+#   - NVIDIA GPU with CUDA support
+#   - nvidia-docker2 installed
+#   - NVIDIA Container Toolkit configured
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up streamlit
+#
+# Installation:
+#   # Ubuntu/Debian
+#   distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+#   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+#   curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+#     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+#     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+#   sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+#   sudo systemctl restart docker
+# =============================================================================
+
+version: '3.8'
+
+services:
+  streamlit:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+  cli-worker:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility

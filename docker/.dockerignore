@@ -1,0 +1,109 @@
+# =============================================================================
+# Docker Ignore File for MedExRAG
+# =============================================================================
+# Excludes files from Docker build context to speed up builds
+# and reduce image size
+# =============================================================================
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Data directories (will be mounted as volumes)
+data/
+
+# Model cache (will be downloaded or mounted)
+.cache/
+*.pt
+*.bin
+*.safetensors
+
+# Documentation (not needed in container)
+docs/
+*.md
+!README.md
+
+# Test files
+tests/
+.pytest_cache/
+
+# Examples
+examples/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker files (don't include in context)
+docker/
+.dockerignore
+
+# CI/CD
+.github/
+
+# DVC
+.dvc/
+*.dvc
+dvc.yaml
+dvc.lock
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Environment files (will be set via docker-compose)
+.env.local
+.env.*.local
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Config (mounted via volumes, not baked in)
+config/
+
+# Additional files not needed in container
+CLAUDE.md
+LICENSE
+metrics/

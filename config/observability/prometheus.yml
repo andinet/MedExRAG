@@ -1,0 +1,58 @@
+# =============================================================================
+# Prometheus Configuration for Medical X-Ray RAG System
+# =============================================================================
+# This configuration scrapes metrics from the Streamlit application
+# and Prometheus itself.
+#
+# Metrics endpoint: http://streamlit:8000/metrics
+# Prometheus UI: http://localhost:9090
+# =============================================================================
+
+global:
+  # How frequently to scrape targets
+  scrape_interval: 15s
+  # How frequently to evaluate rules
+  evaluation_interval: 15s
+  # Attach these labels to any time series or alerts
+  external_labels:
+    monitor: 'medical-rag-monitor'
+    environment: 'development'
+
+# Scrape configuration
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Medical RAG Streamlit Application
+  # ---------------------------------------------------------------------------
+  - job_name: 'medical-rag-streamlit'
+    static_configs:
+      - targets: ['streamlit:8000']
+        labels:
+          service: 'streamlit'
+          component: 'web-ui'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # ---------------------------------------------------------------------------
+  # Prometheus Self-Monitoring
+  # ---------------------------------------------------------------------------
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          component: 'monitoring'
+
+# =============================================================================
+# Alerting Rules (M4)
+# =============================================================================
+# Load alert rules from the alerting directory
+rule_files:
+  - '/etc/prometheus/alerts/*.yml'
+
+# Alertmanager configuration (optional - uncomment to enable notifications)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - 'alertmanager:9093'

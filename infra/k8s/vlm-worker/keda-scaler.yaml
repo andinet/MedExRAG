@@ -1,0 +1,30 @@
+# =============================================================================
+# KEDA ScaledObject — Scale VLM Worker 0 → 1 on Demand
+# =============================================================================
+# Watches Prometheus for pending VLM requests. Scales up when work arrives,
+# scales back to 0 after 10 minutes of idle.
+#
+# Prerequisites: Install KEDA via Helm:
+#   helm repo add kedacore https://kedacore.github.io/charts
+#   helm install keda kedacore/keda --namespace keda --create-namespace
+# =============================================================================
+
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vlm-worker-scaler
+  namespace: medexrag
+spec:
+  scaleTargetRef:
+    name: vlm-worker
+  minReplicaCount: 0
+  maxReplicaCount: 1
+  cooldownPeriod: 600  # 10 minutes idle → scale to 0
+  pollingInterval: 15  # Check every 15 seconds
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.medexrag.svc.cluster.local:9090
+        metricName: medexrag_active_requests
+        threshold: "1"
+        query: sum(medexrag_active_requests)
