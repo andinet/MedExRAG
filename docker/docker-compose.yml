@@ -51,7 +51,8 @@ services:
       # Shared HuggingFace cache (persists model downloads)
       - huggingface_cache:/root/.cache/huggingface
     env_file:
-      - ../.env  # Load LangSmith and observability settings
+      - path: ../.env  # Load LangSmith and observability settings
+        required: false  # Optional: missing .env should not fail `compose config`
     environment:
       - MEDICAL_KB_PATH=/app/data/medical_kb
       - LITERATURE_DIR=/app/data/medical_literature
@@ -97,7 +98,8 @@ services:
       - ../data/analysis_results:/app/data/analysis_results
       - huggingface_cache:/root/.cache/huggingface
     env_file:
-      - ../.env  # Load LangSmith and observability settings
+      - path: ../.env  # Load LangSmith and observability settings
+        required: false  # Optional: missing .env should not fail `compose config`
     environment:
       - MEDICAL_KB_PATH=/app/data/medical_kb
       - LITERATURE_DIR=/app/data/medical_literature
