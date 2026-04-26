@@ -34,6 +34,9 @@ cd MedExRAG
 # Copy environment template and configure
 cp .env.example .env
 
+# Build the base image (required before first `up`; not pulled from a registry)
+docker build -t medexrag-base:latest -f docker/Dockerfile.base .
+
 # Build and start services with GPU support + full observability
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.gpu.yml up streamlit prometheus grafana jaeger otel-collector
 
@@ -48,6 +51,9 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.gpu.yml up 
 #### Start the Application (CPU Fallback)
 
 ```bash
+# Build the base image (required before first `up`; not pulled from a registry)
+docker build -t medexrag-base:latest -f docker/Dockerfile.base .
+
 docker compose -f docker/docker-compose.yml up streamlit prometheus grafana jaeger otel-collector
 ```
 

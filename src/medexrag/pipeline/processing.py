@@ -4,7 +4,14 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-from docling.document_converter import DocumentConverter
+import torch
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import (
+    AcceleratorDevice,
+    AcceleratorOptions,
+    PdfPipelineOptions,
+)
+from docling.document_converter import DocumentConverter, PdfFormatOption
 
 from medexrag.observability import get_logger
 
@@ -16,9 +23,19 @@ class DocLingProcessor:
 
     def __init__(self, enable_ocr: bool = True):
         logger.info("Initializing DocLing processor...")
-        self.converter = DocumentConverter()
+
+        # Force CPU device when no CUDA: DocLing's AUTO mode loads the layout
+        # model with FP16 weights even on CPU, which fails with
+        # "expected scalar type Half but found Float" on every page.
+        device = AcceleratorDevice.CUDA if torch.cuda.is_available() else AcceleratorDevice.CPU
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.accelerator_options = AcceleratorOptions(device=device)
+
+        self.converter = DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+        )
         self.enable_ocr = enable_ocr
-        logger.info("DocLing processor ready")
+        logger.info(f"DocLing processor ready (device={device.value})")
 
     def process_pdf(
         self,

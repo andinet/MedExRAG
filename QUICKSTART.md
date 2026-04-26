@@ -1,5 +1,16 @@
 # MedExRAG Quick Reference
 
+## First-Time Setup
+
+The `streamlit` and `cli-worker` services extend a local `medexrag-base:latest` image that is not pulled from a registry. Build it once before the first `up`:
+
+```bash
+# Run from the repo root
+docker build -t medexrag-base:latest -f docker/Dockerfile.base .
+```
+
+This downloads PyTorch + transformers and takes several minutes. After it succeeds, continue with "Start Everything" below.
+
 ## Start Everything
 
 ```bash

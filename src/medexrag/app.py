@@ -122,6 +122,46 @@ st.markdown(
 )
 
 
+# Persistent upload state — survives a browser refresh by writing the
+# uploaded image and a path marker to disk.
+UPLOADS_DIR = Path("./data/xray_images/uploads")
+LAST_UPLOAD_MARKER = Path("./data/xray_images/.last_upload.txt")
+
+
+def _record_last_upload(path) -> None:
+    """Remember the absolute path of the most recently used X-ray."""
+    LAST_UPLOAD_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    LAST_UPLOAD_MARKER.write_text(str(Path(path).resolve()), encoding="utf-8")
+
+
+def persist_uploaded_image(image: Image.Image, original_name: str) -> str:
+    """Save an uploaded PIL image to disk and remember it as the last upload."""
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_stem = Path(original_name).stem.replace(" ", "_") or "xray"
+    target = UPLOADS_DIR / f"{timestamp}_{safe_stem}.png"
+    image.save(target)
+    _record_last_upload(target)
+    return str(target.resolve())
+
+
+def restore_last_upload():
+    """Return (image, path) for the previously-loaded X-ray, or (None, None)."""
+    if not LAST_UPLOAD_MARKER.exists():
+        return None, None
+    try:
+        path = Path(LAST_UPLOAD_MARKER.read_text(encoding="utf-8").strip())
+        if not path.exists():
+            return None, None
+        image = Image.open(path)
+        if image.mode != "L":
+            image = image.convert("L")
+        return image, str(path)
+    except Exception as e:
+        logger.warning(f"Failed to restore last upload: {e}")
+        return None, None
+
+
 # Initialize session state
 def init_session_state():
     """Initialize session state variables"""
@@ -136,6 +176,13 @@ def init_session_state():
 
     if "current_image_path" not in st.session_state:
         st.session_state.current_image_path = None
+
+    # Survive a browser refresh: restore the last uploaded X-ray from disk.
+    if st.session_state.current_image is None:
+        restored_image, restored_path = restore_last_upload()
+        if restored_image is not None:
+            st.session_state.current_image = restored_image
+            st.session_state.current_image_path = restored_path
 
     if "kb_stats" not in st.session_state:
         st.session_state.kb_stats = None
@@ -276,10 +323,13 @@ def main():
         # Health Status Display (M4)
         st.subheader("🩺 System Health")
 
-        # Configure health checker with pipeline components
+        # Configure health checker with pipeline components.
+        # Use the underlying `_vlm` field rather than the `vlm` property so
+        # that opening the page does not trigger a multi-minute VLM load.
+        # Once the user runs an analysis, `_vlm` becomes the loaded instance.
         if st.session_state.pipeline:
             configure_health_checker(
-                vlm=getattr(st.session_state.pipeline, "vlm", None),
+                vlm=getattr(st.session_state.pipeline, "_vlm", None),
                 vector_store=getattr(st.session_state.pipeline, "vector_store", None),
             )
 
@@ -576,8 +626,9 @@ def main():
                     if image.mode != "L":
                         image = image.convert("L")
 
+                    persisted_path = persist_uploaded_image(image, uploaded_file.name)
                     st.session_state.current_image = image
-                    st.session_state.current_image_path = uploaded_file.name
+                    st.session_state.current_image_path = persisted_path
 
                     col1, col2 = st.columns(2)
 
@@ -612,6 +663,7 @@ def main():
                         image = st.session_state.pipeline.load_image(file_path)
                         st.session_state.current_image = image
                         st.session_state.current_image_path = file_path
+                        _record_last_upload(file_path)
 
                         st.success("✅ Image loaded successfully!")
                         st.image(image, caption=Path(file_path).name, use_container_width=True)
